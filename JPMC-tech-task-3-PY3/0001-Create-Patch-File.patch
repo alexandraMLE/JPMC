@@ -1,0 +1,137 @@
+From 9d8f3375f355eb8d7d7c4ad3b096b1ac9fa58a26 Mon Sep 17 00:00:00 2001
+From: alexandra lee-epstein <a.lee.epstein@gmail.com>
+Date: Tue, 11 Aug 2020 13:25:16 -0700
+Subject: [PATCH] Create Patch File
+
+---
+ src/DataManipulator.ts | 46 +++++++++++++++++++++++++++++++-----------
+ src/Graph.tsx          | 38 ++++++++++++++++++++++------------
+ 2 files changed, 59 insertions(+), 25 deletions(-)
+
+diff --git a/src/DataManipulator.ts b/src/DataManipulator.ts
+index f6b15ff..1fc9102 100644
+--- a/src/DataManipulator.ts
++++ b/src/DataManipulator.ts
+@@ -1,20 +1,42 @@
+-import { ServerRespond } from './DataStreamer';
++/** this file is responsible for processing raw stock data from the server 
++ * before throwing to the graph component to render */
+ 
++import {ServerRespond} from './DataStreamer';
++
++/** export interface Row needs to match schema from Graph.tsx */
+ export interface Row {
+-  stock: string,
+-  top_ask_price: number,
++  price_abc: number,
++  price_def: number,
++  ratio: number,
++  upper_bound: number,
++  lower_bound: number,
+   timestamp: Date,
++  trigger_alert: number | undefined,
+ }
+ 
+-
+ export class DataManipulator {
+-  static generateRow(serverResponds: ServerRespond[]): Row[] {
+-    return serverResponds.map((el: any) => {
+-      return {
+-        stock: el.stock,
+-        top_ask_price: el.top_ask && el.top_ask.price || 0,
+-        timestamp: el.timestamp,
+-      };
+-    })
++  /** serverRespond[] accessed as an array 
++   * where the first element [0-index] is stock ABC and the second element [1-index] is about stock DEF 
++   * coding fact: check the details of things that need to match, i.e. Row[] vs Row { */
++  static generateRow(serverRespond: ServerRespond[] ): Row {
++    const priceABC = (serverRespond[0].top_ask.price + serverRespond[0].top_bid.price) / 2;
++    const priceDEF = (serverRespond[1].top_ask.price + serverRespond[1].top_bid.price) / 2;
++    const ratio = priceABC / priceDEF;
++    const upper_bound = 1 + 0.10;
++    const lower_bound = 1 - 0.10;   /** observe 10% movement, more conservative alerting behaviour,
++     compared to less, say 5%, more aggressive alerting behaviour */
++    /** note how the return is a single row object instead of an array of row objects, coincides with no column-pivots */
++    return {
++      price_abc: priceABC,
++      price_def: priceDEF,
++      ratio,
++      timestamp: serverRespond[0].timestamp > serverRespond[1].timestamp ?
++        serverRespond[0].timestamp : serverRespond[1].timestamp,
++      upper_bound: upper_bound,
++      lower_bound: lower_bound,
++      /** trigger_alert will go when ratio exceeds upper bound and is below lower bound, 
++       * if ratio is within will not return a value */
++      trigger_alert: (ratio > upper_bound || ratio < lower_bound) ? ratio : undefined,
++    };
+   }
+ }
+diff --git a/src/Graph.tsx b/src/Graph.tsx
+index 58fb997..17edcab 100644
+--- a/src/Graph.tsx
++++ b/src/Graph.tsx
+@@ -23,10 +23,15 @@ class Graph extends Component<IProps, {}> {
+     const elem = document.getElementsByTagName('perspective-viewer')[0] as unknown as PerspectiveViewerElement;
+ 
+     const schema = {
+-      stock: 'string',
+-      top_ask_price: 'float',
+-      top_bid_price: 'float',
+-      timestamp: 'date',
++      /** price_ABC and price_DEF are vital to getting the ratio, but will not be graphed */
++      price_abc: 'float',
++      price_def: 'float',
++      ratio: 'float',
++      upper_bound: 'float',
++      lower_bound: 'float',
++      timestamp:'date',
++      /** trigger_alert: the moment when upper and lower bounds are crossed */
++      trigger_alert: 'float'
+     };
+ 
+     if (window.perspective && window.perspective.worker()) {
+@@ -35,24 +40,31 @@ class Graph extends Component<IProps, {}> {
+     if (this.table) {
+       // Load the `table` in the `<perspective-viewer>` DOM reference.
+       elem.load(this.table);
+-      elem.setAttribute('view', 'y_line');
+-      elem.setAttribute('column-pivots', '["stock"]');
+-      elem.setAttribute('row-pivots', '["timestamp"]');
+-      elem.setAttribute('columns', '["top_ask_price"]');
++      elem.setAttribute('view', 'y_line');  /** y_line describes a continuous line */
++      elem.setAttribute('row-pivots', '["timestamp"]');  /** x-axis, 
++      note NO column-pivots defined because we want the ratio, not a seperation between the two stocks */
++      elem.setAttribute('columns', '["ratio", "lower_bound", "upper_bound", "trigger_alert"]');
+       elem.setAttribute('aggregates', JSON.stringify({
+-        stock: 'distinctcount',
+-        top_ask_price: 'avg',
+-        top_bid_price: 'avg',
++        /** aggregates consolidates duplicated data points */
++        price_abc: 'avg',
++        price_def: 'avg',
++        ratio: 'avg',
++        upper_bound: 'avg',
++        lower_bound: 'avg',
+         timestamp: 'distinct count',
++        trigger_alert: 'avg'
+       }));
+     }
+   }
+ 
++  /** another component lifecycle method excuted whenever the component [the graph in this case] updates */
+   componentDidUpdate() {
+     if (this.table) {
+-      this.table.update(
++      this.table.update([
++        /** telling the graph to update after new data from the DataManipulator.ts file 
++         * which is responsible for processing raw data */
+         DataManipulator.generateRow(this.props.data),
+-      );
++      ]);
+     }
+   }
+ }
+-- 
+2.28.0
+
